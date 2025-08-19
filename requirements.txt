@@ -1,0 +1,97 @@
+# Core Python packages
+requests>=2.28.0
+beautifulsoup4>=4.11.0
+pandas>=1.5.0
+numpy>=1.21.0
+scipy>=1.9.0
+
+# Natural Language Processing
+spacy>=3.4.0
+transformers>=4.21.0
+sentence-transformers>=2.2.0
+torch>=1.12.0
+tokenizers>=0.13.0
+
+# Knowledge Graph and Graph Processing
+neo4j>=5.0.0
+networkx>=2.8.0
+bertopic>=0.12.0
+
+# Vector Search and Embeddings
+faiss-cpu>=1.7.0
+# faiss-gpu>=1.7.0  # Uncomment for GPU support
+
+# Materials Science
+pymatgen>=2022.7.25
+matminer>=0.7.8
+mp-api>=0.30.0
+
+# Machine Learning
+scikit-learn>=1.1.0
+umap-learn>=0.5.0
+
+# Web Framework and API
+fastapi>=0.85.0
+uvicorn>=0.18.0
+pydantic>=1.10.0
+redis>=4.3.0
+
+# RAG Framework
+farm-haystack>=1.15.0
+elasticsearch>=8.0.0
+
+# Database
+sqlite3  # Built-in with Python
+sqlalchemy>=1.4.0
+psycopg2-binary>=2.9.0  # For PostgreSQL support
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+plotly>=5.10.0
+bokeh>=2.4.0
+
+# Development and Testing
+pytest>=7.1.0
+pytest-cov>=4.0.0
+black>=22.8.0
+flake8>=5.0.0
+mypy>=0.991
+pre-commit>=2.20.0
+
+# Configuration and Environment
+python-dotenv>=0.20.0
+pyyaml>=6.0
+click>=8.1.0
+tqdm>=4.64.0
+
+# Jupyter and Notebooks (for development)
+jupyter>=1.0.0
+jupyterlab>=3.4.0
+ipywidgets>=8.0.0
+
+# Data Processing
+openpyxl>=3.0.0
+xlsxwriter>=3.0.0
+h5py>=3.7.0
+
+# Async and Concurrency
+aiohttp>=3.8.0
+asyncio>=3.4.0
+
+# Logging and Monitoring
+loguru>=0.6.0
+prometheus-client>=0.14.0
+
+# Documentation
+sphinx>=5.1.0
+sphinx-rtd-theme>=1.0.0
+
+# Optional GPU acceleration
+# torch-geometric>=2.1.0  # Uncomment for graph neural networks
+# dgl>=0.9.0  # Deep Graph Library
+
+# Version pinning for stability
+setuptools>=65.0.0
+wheel>=0.37.0
+pip>=22.2.0

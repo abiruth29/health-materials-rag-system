@@ -1,0 +1,77 @@
+# Data Acquisition Configuration
+data_sources:
+  materials_project:
+    api_key_env: "MP_API_KEY"
+    base_url: "https://api.materialsproject.org"
+    rate_limit: 100  # requests per minute
+    timeout: 30  # seconds
+    
+  nomad:
+    base_url: "https://nomad-lab.eu/prod/rae/api/v1"
+    rate_limit: 60
+    timeout: 30
+    
+  arxiv:
+    base_url: "http://export.arxiv.org/api/query"
+    rate_limit: 20
+    timeout: 30
+    categories:
+      - "cond-mat.mtrl-sci"
+      - "physics.app-ph"
+      - "chem-ph"
+    
+  pubmed:
+    base_url: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    email_env: "NCBI_EMAIL"
+    rate_limit: 10
+    timeout: 30
+
+# Search queries for different materials types
+search_queries:
+  battery_materials:
+    - "lithium ion battery cathode"
+    - "LiFePO4 lithium iron phosphate"
+    - "LiCoO2 lithium cobalt oxide"
+    - "battery electrode materials"
+    
+  solar_materials:
+    - "perovskite solar cell"
+    - "photovoltaic materials"
+    - "organic solar cell"
+    - "silicon solar cell"
+    
+  superconductors:
+    - "high temperature superconductor"
+    - "cuprate superconductor"
+    - "iron-based superconductor"
+    
+  thermoelectrics:
+    - "thermoelectric materials"
+    - "Seebeck coefficient"
+    - "thermal conductivity"
+
+# Data validation settings
+validation:
+  min_abstract_length: 100
+  required_keywords:
+    - "material"
+    - "property"
+    - "synthesis"
+    - "structure"
+  
+  exclusion_keywords:
+    - "biological"
+    - "medical"
+    - "software"
+    - "social"
+  
+  confidence_threshold: 0.6
+  
+# Output settings
+output:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  formats:
+    - "json"
+    - "parquet"
+    - "csv"
