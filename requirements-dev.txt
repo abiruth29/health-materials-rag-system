@@ -1,0 +1,17 @@
+# Development dependencies
+pytest>=7.0.0
+black>=22.0.0
+flake8>=4.0.0
+mypy>=0.950
+pre-commit>=2.20.0
+jupyter>=1.0.0
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# Documentation
+mkdocs>=1.4.0
+mkdocs-material>=8.0.0
+
+# Testing utilities
+pytest-cov>=3.0.0
+pytest-mock>=3.8.0
