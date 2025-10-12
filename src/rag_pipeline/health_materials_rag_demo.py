@@ -1,4 +1,4 @@
-# Health Materials RAG System - Complete Implementation
+# Health Materials RAG System - Complete Implementation with LLM Integration
 # Using the comprehensive 10,000+ health materials database
 
 import pandas as pd
@@ -7,14 +7,21 @@ import json
 import time
 import warnings
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 warnings.filterwarnings('ignore')
 
 # RAG Components
 from sentence_transformers import SentenceTransformer
 import faiss
-from transformers import pipeline
-import torch
+
+# LLM Components (optional for retrieval-only mode)
+try:
+    from transformers import pipeline
+    import torch
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    print("⚠️  Transformers not installed. Install with: pip install transformers torch")
 
 # Visualization
 import matplotlib.pyplot as plt
@@ -38,7 +45,7 @@ PROJECT_ROOT = Path("e:/DDMM/Project")
 DATA_RAG = PROJECT_ROOT / "data" / "rag_optimized"
 
 class HealthMaterialsRAG:
-    """Complete Health Materials RAG System"""
+    """Complete Health Materials RAG System with LLM Integration"""
     
     def __init__(self):
         self.embedding_model = None
@@ -48,6 +55,20 @@ class HealthMaterialsRAG:
         self.materials_db = None
         self.research_db = None
         self.is_loaded = False
+        
+        # LLM components
+        self.llm_generator = None
+        self.llm_loaded = False
+        self.conversation_history = []
+        
+        # Material keywords for smart routing
+        self.material_keywords = [
+            'material', 'alloy', 'polymer', 'ceramic', 'composite', 'biocompatible',
+            'titanium', 'steel', 'implant', 'biomaterial', 'coating', 'scaffold',
+            'hydroxyapatite', 'peek', 'nitinol', 'properties', 'biocompatibility',
+            'corrosion', 'strength', 'modulus', 'density', 'FDA', 'ISO', 'ASTM',
+            'orthopedic', 'cardiovascular', 'dental', 'bone', 'tissue', 'medical device'
+        ]
         
     def load_database(self):
         """Load the complete RAG database"""
@@ -276,6 +297,263 @@ class HealthMaterialsRAG:
         )
         
         return fig
+    
+    def load_llm(self, model_name: str = "microsoft/Phi-3-mini-4k-instruct"):
+        """
+        Load LLM for answer generation.
+        
+        Args:
+            model_name: HuggingFace model name
+                       Options: "microsoft/Phi-3-mini-4k-instruct" (3.8B, best)
+                               "google/flan-t5-large" (770M, faster)
+                               "mistralai/Mistral-7B-Instruct-v0.2" (7B, best quality)
+        """
+        if not LLM_AVAILABLE:
+            print("❌ Transformers not installed. Install with: pip install transformers torch")
+            return False
+        
+        if self.llm_loaded:
+            print("✅ LLM already loaded")
+            return True
+        
+        print(f"\n🤖 Loading LLM for answer generation ({model_name})...")
+        print("   This may take 1-2 minutes on first run...")
+        
+        try:
+            # Import here to avoid issues
+            from transformers import pipeline
+            import torch
+            
+            device = 0 if torch.cuda.is_available() else -1
+            device_name = "GPU" if device == 0 else "CPU"
+            
+            print(f"   ✓ Using device: {device_name}")
+            
+            self.llm_generator = pipeline(
+                "text-generation",
+                model=model_name,
+                device=device,
+                max_new_tokens=300,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9
+            )
+            
+            self.llm_loaded = True
+            print("✅ LLM loaded successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"❌ LLM loading failed: {e}")
+            print("   Continuing in retrieval-only mode")
+            return False
+    
+    def is_material_query(self, query: str) -> bool:
+        """Determine if query is about materials (RAG) or general (direct LLM)."""
+        query_lower = query.lower()
+        keyword_matches = sum(1 for kw in self.material_keywords if kw in query_lower)
+        
+        if keyword_matches >= 2:
+            return True
+        if keyword_matches >= 1 and any(qw in query_lower for qw in ['what', 'which', 'how', 'properties']):
+            return True
+        return False
+    
+    def generate_answer(self, query: str, top_k: int = 5) -> Dict:
+        """
+        Generate natural language answer using RAG + LLM.
+        
+        Args:
+            query: User question
+            top_k: Number of documents to retrieve
+            
+        Returns:
+            Dict with answer, sources, and metadata
+        """
+        start_time = time.time()
+        
+        # Step 1: Retrieve relevant documents
+        search_results = self.semantic_search(query, top_k=top_k)
+        retrieved_docs = search_results['results']
+        
+        # Step 2: If no LLM, return formatted retrieval results
+        if not self.llm_loaded:
+            answer = self._format_retrieval_answer(query, retrieved_docs)
+            return {
+                'query': query,
+                'answer': answer,
+                'sources': [{'name': doc['metadata'].get('name', 'Unknown'), 
+                           'score': doc['similarity_score']} for doc in retrieved_docs],
+                'mode': 'retrieval-only',
+                'processing_time_ms': (time.time() - start_time) * 1000
+            }
+        
+        # Step 3: Create prompt with retrieved context
+        prompt = self._create_rag_prompt(query, retrieved_docs)
+        
+        # Step 4: Generate answer with LLM
+        try:
+            response = self.llm_generator(
+                prompt,
+                max_new_tokens=300,
+                num_return_sequences=1,
+                pad_token_id=self.llm_generator.tokenizer.eos_token_id
+            )
+            
+            generated_text = response[0]['generated_text']
+            
+            # Extract only the answer part
+            if "Answer:" in generated_text:
+                answer = generated_text.split("Answer:")[-1].strip()
+            else:
+                answer = generated_text[len(prompt):].strip()
+                
+        except Exception as e:
+            print(f"❌ Generation failed: {e}")
+            answer = self._format_retrieval_answer(query, retrieved_docs)
+        
+        # Step 5: Format response
+        sources = []
+        for doc in retrieved_docs:
+            meta = doc['metadata']
+            sources.append({
+                'name': meta.get('name', meta.get('title', 'Unknown')),
+                'source': meta['source'],
+                'type': meta['type'],
+                'score': doc['similarity_score']
+            })
+        
+        total_time = (time.time() - start_time) * 1000
+        
+        return {
+            'query': query,
+            'answer': answer,
+            'sources': sources,
+            'retrieved_documents': retrieved_docs,
+            'mode': 'RAG',
+            'processing_time_ms': total_time
+        }
+    
+    def _create_rag_prompt(self, query: str, docs: List[Dict]) -> str:
+        """Create prompt for RAG answer generation."""
+        context_parts = []
+        for i, doc in enumerate(docs, 1):
+            meta = doc['metadata']
+            text = doc['text'][:400]
+            source_name = meta.get('name', meta.get('title', 'Unknown'))
+            context_parts.append(f"[Source {i}] {source_name}\n{text}")
+        
+        context_text = "\n\n".join(context_parts)
+        
+        prompt = f"""You are a biomedical materials expert. Answer the question based on the provided materials database information.
+
+Question: {query}
+
+Retrieved Materials Information:
+{context_text}
+
+Provide a clear, accurate answer based on the retrieved information. Include specific material names and properties when relevant.
+
+Answer:"""
+        return prompt
+    
+    def _format_retrieval_answer(self, query: str, docs: List[Dict]) -> str:
+        """Format retrieval results into readable answer (no LLM)."""
+        if not docs:
+            return "No relevant materials found in the database."
+        
+        answer_parts = [f"Based on the materials database, here are the most relevant results for '{query}':\n"]
+        
+        for i, doc in enumerate(docs[:3], 1):
+            meta = doc['metadata']
+            name = meta.get('name', meta.get('title', 'Unknown'))
+            score = doc['similarity_score']
+            
+            answer_parts.append(f"\n{i}. {name} (Relevance: {score:.2f})")
+            
+            if meta['type'] == 'material':
+                if 'biocompatibility' in meta:
+                    answer_parts.append(f"   • Biocompatibility: {meta['biocompatibility']}")
+                if 'applications' in meta:
+                    answer_parts.append(f"   • Applications: {meta['applications']}")
+            else:
+                if 'materials' in meta:
+                    answer_parts.append(f"   • Materials: {meta['materials']}")
+        
+        return "\n".join(answer_parts)
+    
+    def chat(self, query: str) -> Dict:
+        """
+        Unified chat interface with smart routing.
+        Routes to RAG for materials queries, direct LLM for general questions.
+        
+        Args:
+            query: User input
+            
+        Returns:
+            Dict with answer and metadata
+        """
+        # Check if it's a materials query
+        if self.is_material_query(query):
+            # Use RAG pipeline
+            result = self.generate_answer(query)
+            result['routing'] = 'RAG (materials query detected)'
+        else:
+            # Direct LLM for general questions
+            if self.llm_loaded:
+                result = self._direct_llm_chat(query)
+                result['routing'] = 'Direct LLM (general question)'
+            else:
+                result = {
+                    'query': query,
+                    'answer': "I'm currently in retrieval-only mode. Please ask about biomedical materials, and I'll search the database for you!",
+                    'routing': 'No LLM available',
+                    'mode': 'retrieval-only'
+                }
+        
+        # Add to conversation history
+        self.conversation_history.append({
+            'query': query,
+            'answer': result['answer'],
+            'mode': result['mode']
+        })
+        
+        return result
+    
+    def _direct_llm_chat(self, query: str) -> Dict:
+        """Direct LLM chat for general questions."""
+        start_time = time.time()
+        
+        # Build prompt with conversation history
+        history_text = ""
+        if self.conversation_history:
+            recent = self.conversation_history[-2:]
+            for conv in recent:
+                history_text += f"User: {conv['query']}\nAssistant: {conv['answer'][:150]}\n\n"
+        
+        prompt = f"""{history_text}User: {query}
+Assistant:"""
+        
+        try:
+            response = self.llm_generator(
+                prompt,
+                max_new_tokens=200,
+                num_return_sequences=1,
+                pad_token_id=self.llm_generator.tokenizer.eos_token_id
+            )
+            
+            generated_text = response[0]['generated_text']
+            answer = generated_text[len(prompt):].strip()
+            
+        except Exception as e:
+            answer = f"I encountered an error: {e}"
+        
+        return {
+            'query': query,
+            'answer': answer,
+            'mode': 'direct-chat',
+            'processing_time_ms': (time.time() - start_time) * 1000
+        }
     
     def benchmark_search_performance(self, test_queries: List[str], iterations: int = 5) -> Dict:
         """Benchmark RAG system search performance"""

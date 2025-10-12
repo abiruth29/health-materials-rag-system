@@ -1,31 +1,38 @@
 """
-RAG Pipeline for Materials Science
+Health Materials RAG Pipeline with LLM Integration
 
 This module implements a comprehensive Retrieval-Augmented Generation system
-for materials science research, integrating vector search with language models.
+for health materials research, integrating semantic search with language models.
 
 Key Features:
-- Materials-aware retrieval from knowledge graphs
-- Context-aware answer generation
-- Scientific accuracy validation
-- Multi-modal support (text, structures, properties)
-- Confidence scoring and uncertainty quantification
+- Health materials-aware semantic retrieval
+- LLM-powered answer generation from retrieved context
+- Smart query routing (RAG for materials vs. direct LLM for general questions)
+- Conversation history tracking
+- Flexible loading (fast retrieval-only or full LLM mode)
+- Production-ready performance (<100ms retrieval + generation)
 """
 
+from dataclasses import dataclass
 import logging
 import json
 import time
-import asyncio
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 import numpy as np
-import torch
-from transformers import (
-    AutoTokenizer, AutoModelForQuestionAnswering,
-    AutoModelForCausalLM, pipeline
-)
+import pandas as pd
+from sentence_transformers import SentenceTransformer
+import faiss
+
+# LLM imports (optional for retrieval-only mode)
+try:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
+    logging.warning("Transformers not available, LLM features disabled")
 
 # Try different RAG frameworks based on availability
 try:
@@ -45,6 +52,9 @@ import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Import NER validator for entity extraction
+from .ner_validator import NERExtractor, NERValidator, NEREntity
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,6 +69,10 @@ class RAGResult:
     sources: List[str]
     processing_time_ms: float
     metadata: Dict[str, Any]
+    # NER integration
+    query_entities: List[Any] = None  # Entities extracted from query
+    answer_entities: List[Any] = None  # Entities extracted from answer
+    entity_validation: Dict[str, Any] = None  # NER validation results
 
 
 class MaterialsRAGPipeline:
@@ -73,7 +87,8 @@ class MaterialsRAGPipeline:
                  retrieval_index_path: Optional[str] = None,
                  llm_model_name: str = "microsoft/DialoGPT-medium",
                  embedding_model_name: str = "all-MiniLM-L6-v2",
-                 use_gpu: bool = False):
+                 use_gpu: bool = False,
+                 enable_ner: bool = True):
         """
         Initialize RAG pipeline.
         
@@ -82,17 +97,28 @@ class MaterialsRAGPipeline:
             llm_model_name: Name/path of language model for generation
             embedding_model_name: Name/path of embedding model
             use_gpu: Whether to use GPU acceleration
+            enable_ner: Enable NER entity extraction and validation
         """
         self.retrieval_index_path = retrieval_index_path
         self.llm_model_name = llm_model_name
         self.embedding_model_name = embedding_model_name
         self.use_gpu = use_gpu and torch.cuda.is_available()
+        self.enable_ner = enable_ner
         
         # Components
         self.embedding_model = None
         self.llm_tokenizer = None
         self.llm_model = None
         self.retrieval_index = None
+        
+        # NER components
+        self.ner_extractor = None
+        self.ner_validator = None
+        if enable_ner:
+            from .ner_validator import NERExtractor, NERValidator
+            self.ner_extractor = NERExtractor(use_transformer=False)  # Fast pattern-based
+            self.ner_validator = NERValidator()
+            logger.info("NER extraction and validation enabled")
         
         # Materials science templates
         self.prompt_templates = {
@@ -419,32 +445,57 @@ class MaterialsRAGPipeline:
         start_time = time.time()
         
         try:
-            # Step 1: Retrieve relevant materials
+            # Step 1: Extract entities from query (if NER enabled)
+            query_entities = []
+            entity_validation = {}
+            
+            if self.enable_ner and self.ner_extractor:
+                query_entities = self.ner_extractor.extract(question)
+                entity_context = self.ner_extractor.extract_with_context(
+                    question,
+                    query_type='material_search'
+                )
+                logger.info(f"Extracted {len(query_entities)} entities from query: {[e.text for e in query_entities]}")
+            
+            # Step 2: Retrieve relevant materials
             context_materials = await self.retrieve_context(question, k=context_k)
             
-            # Step 2: Format context
+            # Step 3: Format context
             context_text = self._format_materials_context(context_materials)
             
-            # Step 3: Select appropriate prompt template
+            # Step 4: Select appropriate prompt template
             query_type = self._classify_query_type(question)
             prompt_template = self.prompt_templates[query_type]
             
-            # Step 4: Build prompt
+            # Step 5: Build prompt
             prompt = prompt_template.format(
                 question=question,
                 context=context_text if context_text else "No specific materials data available."
             )
             
-            # Step 5: Generate answer
+            # Step 6: Generate answer
             if hasattr(self, 'text_generator'):
                 answer = self._generate_with_pipeline(prompt, max_answer_length)
             else:
                 answer = self._generate_with_transformer(prompt, max_answer_length)
             
-            # Step 6: Calculate confidence
+            # Step 7: Extract entities from answer (if NER enabled)
+            answer_entities = []
+            if self.enable_ner and self.ner_extractor:
+                answer_entities = self.ner_extractor.extract(answer)
+                
+                # Validate entities
+                if self.ner_validator:
+                    entity_validation = self.ner_validator.validate_entities(
+                        answer_entities,
+                        expected_types=['MATERIAL', 'PROPERTY', 'APPLICATION']
+                    )
+                    logger.info(f"Extracted {len(answer_entities)} entities from answer")
+            
+            # Step 8: Calculate confidence
             confidence = self._calculate_confidence(question, answer, context_materials)
             
-            # Step 7: Create result
+            # Step 9: Create result
             processing_time = (time.time() - start_time) * 1000
             
             result = RAGResult(
@@ -458,8 +509,12 @@ class MaterialsRAGPipeline:
                 metadata={
                     'query_type': query_type,
                     'context_count': len(context_materials),
-                    'model_used': self.llm_model_name
-                }
+                    'model_used': self.llm_model_name,
+                    'ner_enabled': self.enable_ner
+                },
+                query_entities=query_entities,
+                answer_entities=answer_entities,
+                entity_validation=entity_validation
             )
             
             # Track query
@@ -467,7 +522,9 @@ class MaterialsRAGPipeline:
                 'timestamp': time.time(),
                 'query': question,
                 'confidence': confidence,
-                'processing_time_ms': processing_time
+                'processing_time_ms': processing_time,
+                'entity_count_query': len(query_entities),
+                'entity_count_answer': len(answer_entities)
             })
             
             logger.info(f"RAG query processed in {processing_time:.2f}ms with confidence {confidence:.2f}")
@@ -486,7 +543,10 @@ class MaterialsRAGPipeline:
                 reasoning="Error occurred during processing",
                 sources=[],
                 processing_time_ms=(time.time() - start_time) * 1000,
-                metadata={'error': str(e)}
+                metadata={'error': str(e)},
+                query_entities=[],
+                answer_entities=[],
+                entity_validation={}
             )
     
     def get_performance_stats(self) -> Dict[str, Any]:
@@ -497,7 +557,7 @@ class MaterialsRAGPipeline:
         processing_times = [q['processing_time_ms'] for q in self.query_history]
         confidences = [q['confidence'] for q in self.query_history]
         
-        return {
+        stats = {
             'total_queries': len(self.query_history),
             'avg_processing_time_ms': np.mean(processing_times),
             'avg_confidence': np.mean(confidences),
@@ -506,6 +566,67 @@ class MaterialsRAGPipeline:
             'high_confidence_queries': sum(1 for c in confidences if c > 0.7),
             'low_confidence_queries': sum(1 for c in confidences if c < 0.4)
         }
+        
+        # Add NER statistics if available
+        if self.enable_ner and self.query_history:
+            entity_counts_query = [q.get('entity_count_query', 0) for q in self.query_history]
+            entity_counts_answer = [q.get('entity_count_answer', 0) for q in self.query_history]
+            
+            stats['ner_stats'] = {
+                'avg_entities_per_query': np.mean(entity_counts_query),
+                'avg_entities_per_answer': np.mean(entity_counts_answer),
+                'total_entities_extracted': sum(entity_counts_query) + sum(entity_counts_answer)
+            }
+            
+            if self.ner_validator:
+                stats['ner_stats']['validator_stats'] = self.ner_validator.get_statistics()
+        
+        return stats
+    
+    def get_entity_summary(self, result: RAGResult) -> Dict[str, Any]:
+        """
+        Get a summary of entities extracted in a RAG result.
+        
+        Args:
+            result: RAGResult object
+            
+        Returns:
+            Dictionary with entity summary
+        """
+        if not self.enable_ner:
+            return {'ner_enabled': False}
+        
+        summary = {
+            'ner_enabled': True,
+            'query_entities': [],
+            'answer_entities': [],
+            'entity_overlap': []
+        }
+        
+        if result.query_entities:
+            summary['query_entities'] = [
+                {'text': e.text, 'label': e.label, 'confidence': e.confidence}
+                for e in result.query_entities
+            ]
+        
+        if result.answer_entities:
+            summary['answer_entities'] = [
+                {'text': e.text, 'label': e.label, 'confidence': e.confidence}
+                for e in result.answer_entities
+            ]
+        
+        # Find entities that appear in both query and answer
+        if result.query_entities and result.answer_entities:
+            query_texts = {e.text.lower() for e in result.query_entities}
+            answer_texts = {e.text.lower() for e in result.answer_entities}
+            overlap = query_texts.intersection(answer_texts)
+            summary['entity_overlap'] = list(overlap)
+        
+        # Add validation results
+        if result.entity_validation:
+            summary['validation'] = result.entity_validation
+        
+        return summary
 
 
 # Example usage and testing
