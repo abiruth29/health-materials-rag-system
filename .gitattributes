@@ -1,0 +1,4 @@
+data/rag_optimized/*.npy filter=lfs diff=lfs merge=lfs -text
+data/rag_optimized/*.bin filter=lfs diff=lfs merge=lfs -text
+data/rag_optimized/*.csv filter=lfs diff=lfs merge=lfs -text
+data/rag_optimized/*.json filter=lfs diff=lfs merge=lfs -text
